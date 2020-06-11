@@ -192,11 +192,21 @@ fn construct_traced_block(
     original_block: &syn::Block,
 ) -> syn::Block {
     let arg_idents = extract_arg_idents(args, attr_applied, &fn_decl);
+
+    let pretty = if args.pretty { "#" } else { "" };
+
     let arg_idents_format = arg_idents
         .iter()
-        .map(|arg_ident| format!("{} = {{:?}}", arg_ident))
+        // .filter(|&arg_ident| args.args_format.contains_key(arg_ident))
+        .map(|arg_ident| {
+            args.args_format
+                .get(arg_ident)
+                .cloned()
+                .map(|fmt| format!("{}: {}", arg_ident, fmt))
+                .unwrap_or_else(|| format!("{}: {{:{}?}}", arg_ident, pretty))
+        })
         .collect::<Vec<_>>()
-        .join(", ");
+        .join("\n\t");
 
     let entering_format = format!(
         "{}{}\n\t{{}}{}",
