@@ -6,6 +6,7 @@ extern crate syn;
 mod args;
 
 use quote::{quote, ToTokens};
+use std::cmp::Ordering;
 use syn::{
     parse::{Parse, Parser},
     parse_quote,
@@ -191,24 +192,57 @@ fn construct_traced_block(
     fn_decl: &syn::FnDecl,
     original_block: &syn::Block,
 ) -> syn::Block {
-    let arg_idents = extract_arg_idents(args, attr_applied, &fn_decl);
+    let arg_idents = {
+        let mut arg_idents = extract_arg_idents(args, attr_applied, &fn_decl);
+
+        arg_idents.sort_by(|a, b| match (a, b) {
+            (IdentWrapper::Ident(..), IdentWrapper::Empty) => Ordering::Less,
+            (IdentWrapper::Ident(..), IdentWrapper::Ident(..)) => Ordering::Equal,
+            (IdentWrapper::Empty, IdentWrapper::Ident(..)) => Ordering::Greater,
+            (IdentWrapper::Empty, IdentWrapper::Empty) => Ordering::Equal,
+        });
+
+        arg_idents.dedup_by(|a, b| match (a, b) {
+            (IdentWrapper::Empty, IdentWrapper::Empty) => true,
+            _ => false,
+        });
+
+        arg_idents
+    };
 
     let pretty = if args.pretty { "#" } else { "" };
 
-    let arg_idents_format = arg_idents
-        .iter()
-        // .filter(|&arg_ident| args.args_format.contains_key(arg_ident))
-        .map(|arg_ident| {
-            args.args_format
-                .get(arg_ident)
-                .cloned()
-                .map(|fmt| format!("{}: {}", arg_ident, fmt))
-                .unwrap_or_else(|| format!("{}: {{:{}?}}", arg_ident, pretty))
-        })
-        .collect::<Vec<_>>()
-        .join("\n\t");
+    let entering_format = {
+        let arg_idents_format = arg_idents
+            .iter()
+            .filter_map(|wrapped| match wrapped {
+                IdentWrapper::Empty => Some("...".to_string()),
+                IdentWrapper::Ident(arg_ident) => Some(
+                    args.args_format
+                        .get(arg_ident)
+                        .cloned()
+                        .map(|fmt| format!("{}: {}", arg_ident, fmt))
+                        .unwrap_or_else(|| format!("{}: {{:{}?}}", arg_ident, pretty)),
+                ),
+            })
+            .collect::<Vec<_>>()
+            .join("\n\t");
 
-    let entering_format = format!("{}{}\n\t{}", args.prefix_enter, ident, arg_idents_format);
+        let sep = if arg_idents.is_empty() { "" } else { "\n\t" };
+
+        format!("{}{}{}{}", args.prefix_enter, ident, sep, arg_idents_format)
+    };
+
+    let arg_idents = arg_idents
+        .into_iter()
+        .filter_map(|wrapped| {
+            if let IdentWrapper::Ident(arg_ident) = wrapped {
+                Some(arg_ident)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
 
     let return_var = "res".to_string();
     let exiting_format = args
@@ -254,12 +288,12 @@ fn extract_arg_idents(
     args: &args::Args,
     attr_applied: AttrApplied,
     fn_decl: &syn::FnDecl,
-) -> Vec<proc_macro2::Ident> {
+) -> Vec<IdentWrapper> {
     fn process_pat(
         args: &args::Args,
         attr_applied: AttrApplied,
         pat: &syn::Pat,
-        arg_idents: &mut Vec<proc_macro2::Ident>,
+        arg_idents: &mut Vec<IdentWrapper>,
     ) {
         match *pat {
             syn::Pat::Ident(ref pat_ident) => {
@@ -268,16 +302,18 @@ fn extract_arg_idents(
                 if let AttrApplied::Directly = attr_applied {
                     match args.filter {
                         args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+                            arg_idents.push(IdentWrapper::Empty);
                             return;
                         }
                         args::Filter::Disable(ref idents) if idents.contains(ident) => {
+                            arg_idents.push(IdentWrapper::Empty);
                             return;
                         }
                         _ => (),
                     }
-                }
+                };
 
-                arg_idents.push(ident.clone());
+                arg_idents.push(IdentWrapper::Ident(ident.clone()));
             }
             syn::Pat::Tuple(ref pat_tuple) => {
                 pat_tuple.front.iter().for_each(|pat| {
@@ -301,4 +337,9 @@ fn extract_arg_idents(
     }
 
     arg_idents
+}
+
+enum IdentWrapper {
+    Empty,
+    Ident(proc_macro2::Ident),
 }
