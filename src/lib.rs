@@ -1,3 +1,5 @@
+#![feature(trace_macros)]
+
 extern crate proc_macro;
 extern crate proc_macro2;
 extern crate quote;
@@ -7,6 +9,7 @@ mod args;
 
 use quote::{quote, ToTokens};
 use std::cmp::Ordering;
+use std::str::FromStr;
 use syn::{
     parse::{Parse, Parser},
     parse_quote,
@@ -18,6 +21,7 @@ pub fn trace(
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     let raw_args = syn::parse_macro_input!(args as syn::AttributeArgs);
+
     let args = match args::Args::from_raw_args(raw_args) {
         Ok(args) => args,
         Err(errors) => {
@@ -31,9 +35,11 @@ pub fn trace(
 
     let output = if let Ok(item) = syn::Item::parse.parse(input.clone()) {
         expand_item(&args, item)
-    } else if let Ok(impl_item) = syn::ImplItem::parse.parse(input.clone()) {
-        expand_impl_item(&args, impl_item)
-    } else {
+    }
+    // else if let Ok(impl_item) = syn::ImplItem::parse.parse(input.clone()) {
+    //     expand_impl_item(&args, impl_item)
+    // }
+    else {
         let input2 = proc_macro2::TokenStream::from(input);
         syn::Error::new_spanned(input2, "expected one of: `fn`, `impl`, `mod`").to_compile_error()
     };
@@ -77,6 +83,7 @@ fn transform_item(args: &args::Args, attr_applied: AttrApplied, item: &mut syn::
 }
 
 fn transform_fn(args: &args::Args, attr_applied: AttrApplied, item_fn: &mut syn::ItemFn) {
+    println!("FN");
     item_fn.block = Box::new(construct_traced_block(
         &args,
         attr_applied,
@@ -129,8 +136,32 @@ fn transform_mod(args: &args::Args, attr_applied: AttrApplied, item_mod: &mut sy
 }
 
 fn transform_impl(args: &args::Args, attr_applied: AttrApplied, item_impl: &mut syn::ItemImpl) {
+    println!("IMPL");
     item_impl.items.iter_mut().for_each(|impl_item| {
         if let syn::ImplItem::Method(ref mut impl_item_method) = *impl_item {
+            println!("{:?}", impl_item_method.into_token_stream().to_string());
+
+            if !impl_item_method.attrs.is_empty() {
+                let pos = impl_item_method.attrs.iter().position(|attr| {
+                    attr.path.segments[0].ident.to_string() == "trace".to_string()
+                });
+
+                if let Some(pos) = pos {
+                    let trace_macro = impl_item_method.attrs.remove(pos);
+                    println!("{:?}", trace_macro.tts.to_string());
+
+                    // let args: proc_macro::TokenStream = trace_macro.tts.into();
+                    let str = trace_macro.tts.to_string();
+                    let str = &str[1..str.len() - 1];
+                    println!("{:?}", str.to_string());
+
+                    let args = proc_macro::TokenStream::from_str(str).unwrap();
+
+                    let raw_args = syn::parse_macro_input::parse::<syn::AttributeArgs>(args);
+                    println!("{}", raw_args.is_ok());
+                }
+            }
+
             if let AttrApplied::Directly = attr_applied {
                 let ident = &impl_item_method.sig.ident;
 
@@ -176,6 +207,7 @@ fn transform_method(
     attr_applied: AttrApplied,
     impl_item_method: &mut syn::ImplItemMethod,
 ) {
+    println!("METHOD");
     impl_item_method.block = construct_traced_block(
         &args,
         attr_applied,
