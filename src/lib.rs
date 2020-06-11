@@ -5,39 +5,27 @@ extern crate syn;
 
 mod args;
 
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use syn::{
-    parse_quote,
     parse::{Parse, Parser},
+    parse_quote,
 };
 
-
-#[proc_macro]
-pub fn init_depth_var(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let output = if input.is_empty() {
-        quote! {
-            ::std::thread_local! {
-                static DEPTH: ::std::cell::Cell<usize> = ::std::cell::Cell::new(0);
-            }
-        }
-    } else {
-        let input2 = proc_macro2::TokenStream::from(input);
-        syn::Error::new_spanned(input2, "`init_depth_var` takes no arguments").to_compile_error()
-    };
-
-    output.into()
-}
-
 #[proc_macro_attribute]
-pub fn trace(args: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn trace(
+    args: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     let raw_args = syn::parse_macro_input!(args as syn::AttributeArgs);
     let args = match args::Args::from_raw_args(raw_args) {
         Ok(args) => args,
-        Err(errors) => return errors
-            .iter()
-            .map(syn::Error::to_compile_error)
-            .collect::<proc_macro2::TokenStream>()
-            .into(),
+        Err(errors) => {
+            return errors
+                .iter()
+                .map(syn::Error::to_compile_error)
+                .collect::<proc_macro2::TokenStream>()
+                .into()
+        }
     };
 
     let output = if let Ok(item) = syn::Item::parse.parse(input.clone()) {
@@ -52,51 +40,33 @@ pub fn trace(args: proc_macro::TokenStream, input: proc_macro::TokenStream) -> p
     output.into()
 }
 
-
 #[derive(Clone, Copy)]
 enum AttrApplied {
     Directly,
     Indirectly,
 }
 
-fn expand_item(
-    args: &args::Args,
-    mut item: syn::Item,
-) -> proc_macro2::TokenStream {
+fn expand_item(args: &args::Args, mut item: syn::Item) -> proc_macro2::TokenStream {
     transform_item(args, AttrApplied::Directly, &mut item);
 
     match item {
-        syn::Item::Fn(_)   |
-        syn::Item::Mod(_)  |
-        syn::Item::Impl(_) => item.into_token_stream(),
-        _ => {
-            syn::Error::new_spanned(item, "#[trace] is not supported for this item")
-                .to_compile_error()
-        },
+        syn::Item::Fn(_) | syn::Item::Mod(_) | syn::Item::Impl(_) => item.into_token_stream(),
+        _ => syn::Error::new_spanned(item, "#[trace] is not supported for this item")
+            .to_compile_error(),
     }
 }
 
-fn expand_impl_item(
-    args: &args::Args,
-    mut impl_item: syn::ImplItem,
-) -> proc_macro2::TokenStream {
+fn expand_impl_item(args: &args::Args, mut impl_item: syn::ImplItem) -> proc_macro2::TokenStream {
     transform_impl_item(args, AttrApplied::Directly, &mut impl_item);
 
     match impl_item {
         syn::ImplItem::Method(_) => impl_item.into_token_stream(),
-        _ => {
-            syn::Error::new_spanned(impl_item, "#[trace] is not supported for this impl item")
-                .to_compile_error()
-        },
+        _ => syn::Error::new_spanned(impl_item, "#[trace] is not supported for this impl item")
+            .to_compile_error(),
     }
 }
 
-
-fn transform_item(
-    args: &args::Args,
-    attr_applied: AttrApplied,
-    item: &mut syn::Item,
-) {
+fn transform_item(args: &args::Args, attr_applied: AttrApplied, item: &mut syn::Item) {
     match *item {
         syn::Item::Fn(ref mut item_fn) => transform_fn(args, attr_applied, item_fn),
         syn::Item::Mod(ref mut item_mod) => transform_mod(args, attr_applied, item_mod),
@@ -105,11 +75,7 @@ fn transform_item(
     }
 }
 
-fn transform_fn(
-    args: &args::Args,
-    attr_applied: AttrApplied,
-    item_fn: &mut syn::ItemFn,
-) {
+fn transform_fn(args: &args::Args, attr_applied: AttrApplied, item_fn: &mut syn::ItemFn) {
     item_fn.block = Box::new(construct_traced_block(
         &args,
         attr_applied,
@@ -119,14 +85,10 @@ fn transform_fn(
     ));
 }
 
-fn transform_mod(
-    args: &args::Args,
-    attr_applied: AttrApplied,
-    item_mod: &mut syn::ItemMod,
-) {
+fn transform_mod(args: &args::Args, attr_applied: AttrApplied, item_mod: &mut syn::ItemMod) {
     assert!(
-        (item_mod.content.is_some() && item_mod.semi.is_none()) ||
-        (item_mod.content.is_none() && item_mod.semi.is_some())
+        (item_mod.content.is_some() && item_mod.semi.is_none())
+            || (item_mod.content.is_none() && item_mod.semi.is_some())
     );
 
     if item_mod.semi.is_some() {
@@ -137,10 +99,14 @@ fn transform_mod(
         items.iter_mut().for_each(|item| {
             if let AttrApplied::Directly = attr_applied {
                 match *item {
-                    syn::Item::Fn(syn::ItemFn { ref ident, .. })   |
-                    syn::Item::Mod(syn::ItemMod { ref ident, .. }) => match args.filter {
-                        args::Filter::Enable(ref idents) if !idents.contains(ident) => { return; }
-                        args::Filter::Disable(ref idents) if idents.contains(ident) => { return; }
+                    syn::Item::Fn(syn::ItemFn { ref ident, .. })
+                    | syn::Item::Mod(syn::ItemMod { ref ident, .. }) => match args.filter {
+                        args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+                            return;
+                        }
+                        args::Filter::Disable(ref idents) if idents.contains(ident) => {
+                            return;
+                        }
                         _ => (),
                     },
                     _ => (),
@@ -150,27 +116,30 @@ fn transform_mod(
             transform_item(args, AttrApplied::Indirectly, item);
         });
 
-        items.insert(0, parse_quote! {
-            ::std::thread_local! {
-                static DEPTH: ::std::cell::Cell<usize> = ::std::cell::Cell::new(0);
-            }
-        });
+        items.insert(
+            0,
+            parse_quote! {
+                ::std::thread_local! {
+                    static DEPTH: ::std::cell::Cell<usize> = ::std::cell::Cell::new(0);
+                }
+            },
+        );
     }
 }
 
-fn transform_impl(
-    args: &args::Args,
-    attr_applied: AttrApplied,
-    item_impl: &mut syn::ItemImpl,
-) {
+fn transform_impl(args: &args::Args, attr_applied: AttrApplied, item_impl: &mut syn::ItemImpl) {
     item_impl.items.iter_mut().for_each(|impl_item| {
         if let syn::ImplItem::Method(ref mut impl_item_method) = *impl_item {
             if let AttrApplied::Directly = attr_applied {
                 let ident = &impl_item_method.sig.ident;
 
                 match args.filter {
-                    args::Filter::Enable(ref idents) if !idents.contains(ident) => { return; }
-                    args::Filter::Disable(ref idents) if idents.contains(ident) => { return; }
+                    args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+                        return;
+                    }
+                    args::Filter::Disable(ref idents) if idents.contains(ident) => {
+                        return;
+                    }
                     _ => (),
                 }
             }
@@ -196,7 +165,7 @@ fn transform_impl_item(
     match *impl_item {
         syn::ImplItem::Method(ref mut impl_item_method) => {
             transform_method(args, attr_applied, impl_item_method)
-        },
+        }
         _ => (),
     }
 }
@@ -215,7 +184,6 @@ fn transform_method(
     );
 }
 
-
 fn construct_traced_block(
     args: &args::Args,
     attr_applied: AttrApplied,
@@ -230,11 +198,11 @@ fn construct_traced_block(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let pretty = if args.pretty { "#" } else { "" };
-    let entering_format =
-        format!("{{:depth$}}{} Entering {}({})", args.prefix_enter, ident, arg_idents_format);
-    let exiting_format =
-        format!("{{:depth$}}{} Exiting {} = {{:{}?}}", args.prefix_exit, ident, pretty);
+    let entering_format = format!(
+        "{}{}\n\t{{}}{}",
+        args.prefix_enter, ident, arg_idents_format
+    );
+    let exiting_format = format!("{{}}{}{} = {{:{}?}}", args.prefix_exit, ident, pretty);
 
     let pause_stmt = if args.pause {
         quote! {{
@@ -253,13 +221,11 @@ fn construct_traced_block(
     };
 
     parse_quote! {{
-        #printer(#entering_format, "", #(#arg_idents,)* depth = DEPTH.with(|d| d.get()));
+        #printer(#entering_format, "", #(#arg_idents,)*);
         #pause_stmt
-        DEPTH.with(|d| d.set(d.get() + 1));
         let mut fn_closure = move || #original_block;
         let fn_return_value = fn_closure();
-        DEPTH.with(|d| d.set(d.get() - 1));
-        #printer(#exiting_format, "", fn_return_value, depth = DEPTH.with(|d| d.get()));
+        #printer(#exiting_format, "", fn_return_value);
         #pause_stmt
         fn_return_value
     }}
@@ -282,19 +248,23 @@ fn extract_arg_idents(
 
                 if let AttrApplied::Directly = attr_applied {
                     match args.filter {
-                        args::Filter::Enable(ref idents) if !idents.contains(ident) => { return; },
-                        args::Filter::Disable(ref idents) if idents.contains(ident) => { return; },
+                        args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+                            return;
+                        }
+                        args::Filter::Disable(ref idents) if idents.contains(ident) => {
+                            return;
+                        }
                         _ => (),
                     }
                 }
 
                 arg_idents.push(ident.clone());
-            },
+            }
             syn::Pat::Tuple(ref pat_tuple) => {
                 pat_tuple.front.iter().for_each(|pat| {
                     process_pat(args, attr_applied, pat, arg_idents);
                 });
-            },
+            }
             _ => unimplemented!(),
         }
     }
@@ -303,13 +273,11 @@ fn extract_arg_idents(
 
     for input in &fn_decl.inputs {
         match *input {
-            syn::FnArg::SelfRef(_)   |
-            syn::FnArg::SelfValue(_) => (),  // ignore `self`
+            syn::FnArg::SelfRef(_) | syn::FnArg::SelfValue(_) => (), // ignore `self`
             syn::FnArg::Captured(ref arg_captured) => {
                 process_pat(args, attr_applied, &arg_captured.pat, &mut arg_idents);
-            },
-            syn::FnArg::Inferred(_) |
-            syn::FnArg::Ignored(_)  => unimplemented!(),
+            }
+            syn::FnArg::Inferred(_) | syn::FnArg::Ignored(_) => unimplemented!(),
         }
     }
 
