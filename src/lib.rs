@@ -208,11 +208,20 @@ fn construct_traced_block(
         .collect::<Vec<_>>()
         .join("\n\t");
 
-    let entering_format = format!(
-        "{}{}\n\t{{}}{}",
-        args.prefix_enter, ident, arg_idents_format
-    );
-    let exiting_format = format!("{{}}{}{} = {{:{}?}}", args.prefix_exit, ident, pretty);
+    let entering_format = format!("{}{}\n\t{}", args.prefix_enter, ident, arg_idents_format);
+
+    let return_var = "res".to_string();
+    let exiting_format = args
+        .args_format
+        .iter()
+        .find(|(arg_ident, _)| arg_ident.to_string() == return_var)
+        .map(|(_, fmt)| format!("{}{}\n\t{}: {}", args.prefix_exit, ident, return_var, fmt))
+        .unwrap_or_else(|| {
+            format!(
+                "{}{}\n\t{}: {{:{}?}}",
+                args.prefix_exit, ident, return_var, pretty
+            )
+        });
 
     let pause_stmt = if args.pause {
         quote! {{
@@ -231,11 +240,11 @@ fn construct_traced_block(
     };
 
     parse_quote! {{
-        #printer(#entering_format, "", #(#arg_idents,)*);
+        #printer(#entering_format, #(#arg_idents,)*);
         #pause_stmt
         let mut fn_closure = move || #original_block;
         let fn_return_value = fn_closure();
-        #printer(#exiting_format, "", fn_return_value);
+        #printer(#exiting_format, fn_return_value);
         #pause_stmt
         fn_return_value
     }}
