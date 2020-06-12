@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use std::iter::FromIterator;
 use syn::{self, spanned::Spanned};
 
+#[derive(Debug, Clone)]
 pub(crate) struct Args {
-    pub(crate) prefix_enter: String,
-    pub(crate) prefix_exit: String,
+    pub(crate) prefix_enter: Prefix,
+    pub(crate) prefix_exit: Prefix,
     pub(crate) filter: Filter,
     pub(crate) pause: bool,
     pub(crate) pretty: bool,
@@ -12,14 +14,55 @@ pub(crate) struct Args {
     pub(crate) args_format: HashMap<proc_macro2::Ident, String>,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) enum Filter {
     None,
     Enable(HashSet<proc_macro2::Ident>),
     Disable(HashSet<proc_macro2::Ident>),
 }
 
-const DEFAULT_PREFIX_ENTER: &str = ">>> ";
-const DEFAULT_PREFIX_EXIT: &str = "<<< ";
+#[derive(Debug, Clone)]
+pub(crate) struct Prefix(Option<String>);
+
+impl Prefix {
+    const DEFAULT_ENTER: &'static str = ">>>";
+    const DEFAULT_EXIT: &'static str = "<<<";
+
+    pub(crate) fn enter(&self) -> String {
+        format!(
+            "{} {}",
+            Self::DEFAULT_ENTER,
+            self.0.as_ref().map(|p| p.as_str()).unwrap_or("")
+        )
+    }
+
+    pub(crate) fn exit(&self) -> String {
+        format!(
+            "{} {}",
+            Self::DEFAULT_EXIT,
+            self.0.as_ref().map(|p| p.as_str()).unwrap_or("")
+        )
+    }
+}
+
+impl<'a> FromIterator<&'a Prefix> for Prefix {
+    fn from_iter<T: IntoIterator<Item = &'a Prefix>>(iter: T) -> Self {
+        let mut segments = Vec::new();
+
+        for item in iter {
+            if let Some(value) = item.0.as_ref() {
+                segments.push(value.clone());
+            }
+        }
+
+        Prefix(if segments.is_empty() {
+            None
+        } else {
+            Some(segments.join(""))
+        })
+    }
+}
+
 const DEFAULT_PAUSE: bool = false;
 const DEFAULT_PRETTY: bool = false;
 const DEFAULT_LOGGING: bool = true;
@@ -63,10 +106,6 @@ impl Args {
                     "pretty" => ArgName::Pretty,
                     "logging" => ArgName::Logging,
                     _ => ArgName::ArgFormat,
-                    // _ => return Err(vec![syn::Error::new_spanned(
-                    //     ident.clone(),
-                    //     format_args!("unknown attribute argument `{}`", ident),
-                    // )]),
                 };
 
                 let prefix_enter_type_error = || {
@@ -332,9 +371,11 @@ impl Args {
             }
 
             let prefix_enter = first_no_span!(prefix_enter_args)
-                .unwrap_or_else(|| DEFAULT_PREFIX_ENTER.to_owned());
-            let prefix_exit =
-                first_no_span!(prefix_exit_args).unwrap_or_else(|| DEFAULT_PREFIX_EXIT.to_owned());
+                .map(|prefix| Prefix(Some(prefix)))
+                .unwrap_or_else(|| Prefix(None));
+            let prefix_exit = first_no_span!(prefix_exit_args)
+                .map(|prefix| Prefix(Some(prefix)))
+                .unwrap_or_else(|| Prefix(None));
             let filter = match (first_no_span!(enable_args), first_no_span!(disable_args)) {
                 (None, None) => Filter::None,
                 (Some(idents), None) => Filter::Enable(idents),
