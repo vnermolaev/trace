@@ -83,8 +83,6 @@ fn transform_fn(
     attrs: &[AttrApplication],
     item_fn: &mut syn::ItemFn,
 ) -> Result<(), Vec<syn::Error>> {
-    println!("FN");
-
     item_fn.block = Box::new(construct_traced_block(
         &attrs,
         &item_fn.ident,
@@ -99,7 +97,6 @@ fn transform_mod(
     attrs: &[AttrApplication],
     item_mod: &mut syn::ItemMod,
 ) -> Result<(), Vec<syn::Error>> {
-    println!("MOD");
     assert!(
         (item_mod.content.is_some() && item_mod.semi.is_none())
             || (item_mod.content.is_none() && item_mod.semi.is_some())
@@ -147,48 +144,8 @@ fn transform_mod(
             }?;
 
             let attrs = create_context(attrs, extract_local_attrs(raw_local_attr)?);
-
-            //
-            //     let local_attrs = extract_local_attrs(raw_local_attr)?;
-            //
-            //     let attrs = attrs
-            //         .iter()
-            //         .cloned()
-            //         .map(|attr| attr.demote())
-            //         .chain(local_attrs.map(|local_attr| AttrApplication::Directly(local_attr)))
-            //         .collect::<Vec<_>>();
-            //
             transform_item(&attrs, item)?;
         }
-
-        // items.iter_mut().for_each(|item| {
-        //     if let AttrApplied::Directly = attr_applied {
-        //         match *item {
-        //             syn::Item::Fn(syn::ItemFn { ref ident, .. })
-        //             | syn::Item::Mod(syn::ItemMod { ref ident, .. }) => match args.filter {
-        //                 args::Filter::Enable(ref idents) if !idents.contains(ident) => {
-        //                     return;
-        //                 }
-        //                 args::Filter::Disable(ref idents) if idents.contains(ident) => {
-        //                     return;
-        //                 }
-        //                 _ => (),
-        //             },
-        //             _ => (),
-        //         }
-        //     }
-        //
-        //     transform_item(attrs, item);
-        // });
-
-        // items.insert(
-        //     0,
-        //     parse_quote! {
-        //         ::std::thread_local! {
-        //             static DEPTH: ::std::cell::Cell<usize> = ::std::cell::Cell::new(0);
-        //         }
-        //     },
-        // );
     }
 
     Ok(())
@@ -198,12 +155,8 @@ fn transform_impl(
     attrs: &[AttrApplication],
     item_impl: &mut syn::ItemImpl,
 ) -> Result<(), Vec<syn::Error>> {
-    println!("IMPL");
-
     'item_eval: for impl_item in item_impl.items.iter_mut() {
         if let syn::ImplItem::Method(ref mut impl_item_method) = impl_item {
-            // println!("{:?}", impl_item_method.into_token_stream().to_string());
-
             for attr in attrs {
                 if let AttrApplication::Directly(attr) = attr {
                     let ident = &impl_item_method.sig.ident;
@@ -281,8 +234,6 @@ fn construct_traced_block(
         arg_idents.dedup_by(|a, b| a.is_none() && b.is_none());
         arg_idents
     };
-
-    println!("{:?}", arg_idents);
 
     let pretty = if attrs.iter().any(|attr| attr.pretty) {
         "#"
@@ -403,7 +354,6 @@ fn extract_local_attrs(
         // Another MACRO_NAME is attached.
 
         let trace_macro = attrs.remove(pos);
-        println!("{:?}", trace_macro.tts.to_string());
 
         // TODO: is there a better way to strip brackets?
         let str = trace_macro.tts.to_string();
@@ -474,7 +424,7 @@ fn extract_arg_idents(
     arg_idents
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum AttrApplication {
     Directly(args::Args),
     Indirectly(args::Args),

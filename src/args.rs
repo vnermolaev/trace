@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use syn::{self, spanned::Spanned};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Args {
     pub(crate) prefix_enter: Prefix,
     pub(crate) prefix_exit: Prefix,
@@ -13,14 +13,14 @@ pub(crate) struct Args {
     pub(crate) args_format: HashMap<proc_macro2::Ident, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) enum Filter {
     None,
     Enable(HashSet<proc_macro2::Ident>),
     Disable(HashSet<proc_macro2::Ident>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Prefix(Option<String>);
 
 impl Prefix {
@@ -64,7 +64,6 @@ impl<'a> FromIterator<&'a Prefix> for Prefix {
 
 const DEFAULT_PAUSE: bool = false;
 const DEFAULT_PRETTY: bool = false;
-const DEFAULT_LOGGING: bool = true;
 
 impl Args {
     pub(crate) fn from_raw_args(raw_args: syn::AttributeArgs) -> Result<Self, Vec<syn::Error>> {
