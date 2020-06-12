@@ -7,13 +7,17 @@ extern crate syn;
 
 mod args;
 
+use args::Prefix;
 use quote::{quote, ToTokens};
 use std::cmp::Ordering;
+use std::ops::Deref;
 use std::str::FromStr;
 use syn::{
     parse::{Parse, Parser},
     parse_quote,
 };
+
+const MACRO_NAME: &str = "trace";
 
 #[proc_macro_attribute]
 pub fn trace(
@@ -22,8 +26,8 @@ pub fn trace(
 ) -> proc_macro::TokenStream {
     let raw_args = syn::parse_macro_input!(args as syn::AttributeArgs);
 
-    let args = match args::Args::from_raw_args(raw_args) {
-        Ok(args) => args,
+    let attr = match args::Args::from_raw_args(raw_args) {
+        Ok(args) => AttrApplication::Directly(args),
         Err(errors) => {
             return errors
                 .iter()
@@ -33,8 +37,14 @@ pub fn trace(
         }
     };
 
-    let output = if let Ok(item) = syn::Item::parse.parse(input.clone()) {
-        expand_item(&args, item)
+    let output = if let Ok(ref mut item) = syn::Item::parse.parse(input.clone()) {
+        match expand_item(&[attr], item) {
+            Ok(()) => item.into_token_stream(),
+            Err(errors) => errors
+                .iter()
+                .map(syn::Error::to_compile_error)
+                .collect::<proc_macro2::TokenStream>(),
+        }
     }
     // else if let Ok(impl_item) = syn::ImplItem::parse.parse(input.clone()) {
     //     expand_impl_item(&args, impl_item)
@@ -47,249 +57,374 @@ pub fn trace(
     output.into()
 }
 
-#[derive(Clone, Copy)]
-enum AttrApplied {
-    Directly,
-    Indirectly,
+#[derive(Debug, Clone)]
+enum AttrApplication {
+    Directly(args::Args),
+    Indirectly(args::Args),
 }
 
-fn expand_item(args: &args::Args, mut item: syn::Item) -> proc_macro2::TokenStream {
-    transform_item(args, AttrApplied::Directly, &mut item);
+impl AttrApplication {
+    fn demote(self) -> Self {
+        if let AttrApplication::Directly(args) = self {
+            AttrApplication::Indirectly(args)
+        } else {
+            self
+        }
+    }
 
-    match item {
-        syn::Item::Fn(_) | syn::Item::Mod(_) | syn::Item::Impl(_) => item.into_token_stream(),
-        _ => syn::Error::new_spanned(item, "#[trace] is not supported for this item")
-            .to_compile_error(),
+    fn is_direct(&self) -> bool {
+        if let AttrApplication::Directly(_) = self {
+            true
+        } else {
+            false
+        }
     }
 }
 
-fn expand_impl_item(args: &args::Args, mut impl_item: syn::ImplItem) -> proc_macro2::TokenStream {
-    transform_impl_item(args, AttrApplied::Directly, &mut impl_item);
+impl Deref for AttrApplication {
+    type Target = args::Args;
 
-    match impl_item {
-        syn::ImplItem::Method(_) => impl_item.into_token_stream(),
-        _ => syn::Error::new_spanned(impl_item, "#[trace] is not supported for this impl item")
-            .to_compile_error(),
+    fn deref(&self) -> &Self::Target {
+        match self {
+            AttrApplication::Directly(attr) => attr,
+            AttrApplication::Indirectly(attr) => attr,
+        }
     }
 }
 
-fn transform_item(args: &args::Args, attr_applied: AttrApplied, item: &mut syn::Item) {
+fn expand_item(attrs: &[AttrApplication], item: &mut syn::Item) -> Result<(), Vec<syn::Error>> {
     match *item {
-        syn::Item::Fn(ref mut item_fn) => transform_fn(args, attr_applied, item_fn),
-        syn::Item::Mod(ref mut item_mod) => transform_mod(args, attr_applied, item_mod),
-        syn::Item::Impl(ref mut item_impl) => transform_impl(args, attr_applied, item_impl),
-        _ => (),
+        syn::Item::Fn(_) | syn::Item::Mod(_) | syn::Item::Impl(_) => transform_item(attrs, item),
+        _ => Err(vec![syn::Error::new_spanned(
+            item,
+            "#[trace] is not supported for this item",
+        )]),
     }
 }
 
-fn transform_fn(args: &args::Args, attr_applied: AttrApplied, item_fn: &mut syn::ItemFn) {
+// fn expand_impl_item(args: &args::Args, mut impl_item: syn::ImplItem) -> proc_macro2::TokenStream {
+//     transform_impl_item(args, AttrApplied::Directly, &mut impl_item);
+//
+//     match impl_item {
+//         syn::ImplItem::Method(_) => impl_item.into_token_stream(),
+//         _ => syn::Error::new_spanned(impl_item, "#[trace] is not supported for this impl item")
+//             .to_compile_error(),
+//     }
+// }
+
+fn transform_item(attrs: &[AttrApplication], item: &mut syn::Item) -> Result<(), Vec<syn::Error>> {
+    match item {
+        syn::Item::Fn(ref mut item_fn) => transform_fn(attrs, item_fn),
+        // syn::Item::Mod(ref mut item_mod) => transform_mod(args, attr_applied, item_mod),
+        syn::Item::Impl(ref mut item_impl) => transform_impl(attrs, item_impl),
+        _ => Ok(()),
+    }
+}
+
+fn transform_fn(
+    attrs: &[AttrApplication],
+    item_fn: &mut syn::ItemFn,
+) -> Result<(), Vec<syn::Error>> {
     println!("FN");
     item_fn.block = Box::new(construct_traced_block(
-        &args,
-        attr_applied,
+        &attrs,
         &item_fn.ident,
         &item_fn.decl,
         &item_fn.block,
     ));
+
+    Ok(())
 }
 
-fn transform_mod(args: &args::Args, attr_applied: AttrApplied, item_mod: &mut syn::ItemMod) {
-    assert!(
-        (item_mod.content.is_some() && item_mod.semi.is_none())
-            || (item_mod.content.is_none() && item_mod.semi.is_some())
-    );
+// fn transform_mod(args: &args::Args, attr_applied: AttrApplied, item_mod: &mut syn::ItemMod) {
+//     assert!(
+//         (item_mod.content.is_some() && item_mod.semi.is_none())
+//             || (item_mod.content.is_none() && item_mod.semi.is_some())
+//     );
+//
+//     if item_mod.semi.is_some() {
+//         unimplemented!();
+//     }
+//
+//     if let Some((_, items)) = item_mod.content.as_mut() {
+//         items.iter_mut().for_each(|item| {
+//             if let AttrApplied::Directly = attr_applied {
+//                 match *item {
+//                     syn::Item::Fn(syn::ItemFn { ref ident, .. })
+//                     | syn::Item::Mod(syn::ItemMod { ref ident, .. }) => match args.filter {
+//                         args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+//                             return;
+//                         }
+//                         args::Filter::Disable(ref idents) if idents.contains(ident) => {
+//                             return;
+//                         }
+//                         _ => (),
+//                     },
+//                     _ => (),
+//                 }
+//             }
+//
+//             transform_item(args, AttrApplied::Indirectly, item);
+//         });
+//
+//         items.insert(
+//             0,
+//             parse_quote! {
+//                 ::std::thread_local! {
+//                     static DEPTH: ::std::cell::Cell<usize> = ::std::cell::Cell::new(0);
+//                 }
+//             },
+//         );
+//     }
+// }
 
-    if item_mod.semi.is_some() {
-        unimplemented!();
-    }
+fn transform_impl(
+    attrs: &[AttrApplication],
+    item_impl: &mut syn::ItemImpl,
+) -> Result<(), Vec<syn::Error>> {
+    println!("IMPL\n{:?}", attrs);
 
-    if let Some((_, items)) = item_mod.content.as_mut() {
-        items.iter_mut().for_each(|item| {
-            if let AttrApplied::Directly = attr_applied {
-                match *item {
-                    syn::Item::Fn(syn::ItemFn { ref ident, .. })
-                    | syn::Item::Mod(syn::ItemMod { ref ident, .. }) => match args.filter {
-                        args::Filter::Enable(ref idents) if !idents.contains(ident) => {
-                            return;
-                        }
-                        args::Filter::Disable(ref idents) if idents.contains(ident) => {
-                            return;
-                        }
-                        _ => (),
-                    },
-                    _ => (),
-                }
-            }
-
-            transform_item(args, AttrApplied::Indirectly, item);
-        });
-
-        items.insert(
-            0,
-            parse_quote! {
-                ::std::thread_local! {
-                    static DEPTH: ::std::cell::Cell<usize> = ::std::cell::Cell::new(0);
-                }
-            },
-        );
-    }
-}
-
-fn transform_impl(args: &args::Args, attr_applied: AttrApplied, item_impl: &mut syn::ItemImpl) {
-    println!("IMPL");
-    item_impl.items.iter_mut().for_each(|impl_item| {
+    'item_eval: for impl_item in item_impl.items.iter_mut() {
         if let syn::ImplItem::Method(ref mut impl_item_method) = *impl_item {
             println!("{:?}", impl_item_method.into_token_stream().to_string());
 
-            if !impl_item_method.attrs.is_empty() {
-                let pos = impl_item_method.attrs.iter().position(|attr| {
-                    attr.path.segments[0].ident.to_string() == "trace".to_string()
-                });
+            for attr in attrs {
+                if let AttrApplication::Directly(attr) = attr {
+                    let ident = &impl_item_method.sig.ident;
+
+                    match attr.filter {
+                        args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+                            continue 'item_eval;
+                        }
+                        args::Filter::Disable(ref idents) if idents.contains(ident) => {
+                            continue 'item_eval;
+                        }
+                        _ => (),
+                    }
+                }
+            }
+
+            let local_attrs = if !impl_item_method.attrs.is_empty() {
+                // Evaluate attached macros.
+
+                let pos = impl_item_method
+                    .attrs
+                    .iter()
+                    .position(|attr| attr.path.segments[0].ident.to_string() == MACRO_NAME);
 
                 if let Some(pos) = pos {
+                    // Another MACRO_NAME is attached.
+                    // Top and low level arguments must be merged.
+
                     let trace_macro = impl_item_method.attrs.remove(pos);
                     println!("{:?}", trace_macro.tts.to_string());
 
-                    // let args: proc_macro::TokenStream = trace_macro.tts.into();
+                    // TODO: is there a better way to strip brackets?
                     let str = trace_macro.tts.to_string();
                     let str = &str[1..str.len() - 1];
-                    println!("{:?}", str.to_string());
 
-                    let args = proc_macro::TokenStream::from_str(str).unwrap();
-
-                    let raw_args = syn::parse_macro_input::parse::<syn::AttributeArgs>(args);
-                    println!("{}", raw_args.is_ok());
+                    let local_args = proc_macro::TokenStream::from_str(str).unwrap();
+                    let raw_local_args =
+                        syn::parse_macro_input::parse::<syn::AttributeArgs>(local_args)
+                            .map_err(|err| vec![err])?;
+                    let local_args = args::Args::from_raw_args(raw_local_args)?;
+                    Some(local_args)
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
 
-            if let AttrApplied::Directly = attr_applied {
-                let ident = &impl_item_method.sig.ident;
-
-                match args.filter {
-                    args::Filter::Enable(ref idents) if !idents.contains(ident) => {
-                        return;
-                    }
-                    args::Filter::Disable(ref idents) if idents.contains(ident) => {
-                        return;
-                    }
-                    _ => (),
-                }
-            }
+            let attrs = attrs
+                .iter()
+                .cloned()
+                .map(|attr| attr.demote())
+                .chain(local_attrs.map(|local_attr| AttrApplication::Directly(local_attr)))
+                .collect::<Vec<_>>();
 
             impl_item_method.block = construct_traced_block(
-                &args,
-                AttrApplied::Indirectly,
+                &attrs,
                 &impl_item_method.sig.ident,
                 &impl_item_method.sig.decl,
                 &impl_item_method.block,
             );
         }
-    });
-}
-
-fn transform_impl_item(
-    args: &args::Args,
-    attr_applied: AttrApplied,
-    impl_item: &mut syn::ImplItem,
-) {
-    // Will probably add more cases in the future
-    #[cfg_attr(feature = "cargo-clippy", allow(single_match))]
-    match *impl_item {
-        syn::ImplItem::Method(ref mut impl_item_method) => {
-            transform_method(args, attr_applied, impl_item_method)
-        }
-        _ => (),
     }
-}
 
-fn transform_method(
-    args: &args::Args,
-    attr_applied: AttrApplied,
-    impl_item_method: &mut syn::ImplItemMethod,
-) {
-    println!("METHOD");
-    impl_item_method.block = construct_traced_block(
-        &args,
-        attr_applied,
-        &impl_item_method.sig.ident,
-        &impl_item_method.sig.decl,
-        &impl_item_method.block,
-    );
-}
+    Ok(())
 
+    // item_impl.items.iter_mut().for_each(|impl_item| {
+    //     if let syn::ImplItem::Method(ref mut impl_item_method) = *impl_item {
+    //         println!("{:?}", impl_item_method.into_token_stream().to_string());
+    //
+    //         if !impl_item_method.attrs.is_empty() {
+    //             let pos = impl_item_method.attrs.iter().position(|attr| {
+    //                 attr.path.segments[0].ident.to_string() == "trace".to_string()
+    //             });
+    //
+    //             if let Some(pos) = pos {
+    //                 let trace_macro = impl_item_method.attrs.remove(pos);
+    //                 println!("{:?}", trace_macro.tts.to_string());
+    //
+    //                 // let args: proc_macro::TokenStream = trace_macro.tts.into();
+    //                 let str = trace_macro.tts.to_string();
+    //                 let str = &str[1..str.len() - 1];
+    //                 println!("{:?}", str.to_string());
+    //
+    //                 let args = proc_macro::TokenStream::from_str(str).unwrap();
+    //
+    //                 let raw_args = syn::parse_macro_input::parse::<syn::AttributeArgs>(args);
+    //                 println!("{}", raw_args.is_ok());
+    //             }
+    //         }
+    //
+    //         if let AttrApplied::Directly = attr_applied {
+    //             let ident = &impl_item_method.sig.ident;
+    //
+    //             match args.filter {
+    //                 args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+    //                     return;
+    //                 }
+    //                 args::Filter::Disable(ref idents) if idents.contains(ident) => {
+    //                     return;
+    //                 }
+    //                 _ => (),
+    //             }
+    //         }
+    //
+    //         impl_item_method.block = construct_traced_block(
+    //             &args,
+    //             AttrApplied::Indirectly,
+    //             &impl_item_method.sig.ident,
+    //             &impl_item_method.sig.decl,
+    //             &impl_item_method.block,
+    //         );
+    //     }
+    // });
+}
+//
+// fn transform_impl_item(
+//     args: &args::Args,
+//     attr_applied: AttrApplied,
+//     impl_item: &mut syn::ImplItem,
+// ) {
+//     // Will probably add more cases in the future
+//     #[cfg_attr(feature = "cargo-clippy", allow(single_match))]
+//     match *impl_item {
+//         syn::ImplItem::Method(ref mut impl_item_method) => {
+//             transform_method(args, attr_applied, impl_item_method)
+//         }
+//         _ => (),
+//     }
+// }
+//
+// fn transform_method(
+//     args: &args::Args,
+//     attr_applied: AttrApplied,
+//     impl_item_method: &mut syn::ImplItemMethod,
+// ) {
+//     println!("METHOD");
+//     impl_item_method.block = construct_traced_block(
+//         &args,
+//         attr_applied,
+//         &impl_item_method.sig.ident,
+//         &impl_item_method.sig.decl,
+//         &impl_item_method.block,
+//     );
+// }
+//
 fn construct_traced_block(
-    args: &args::Args,
-    attr_applied: AttrApplied,
+    attrs: &[AttrApplication],
     ident: &proc_macro2::Ident,
     fn_decl: &syn::FnDecl,
     original_block: &syn::Block,
 ) -> syn::Block {
     let arg_idents = {
-        let mut arg_idents = extract_arg_idents(args, attr_applied, &fn_decl);
-
+        let mut arg_idents = extract_arg_idents(attrs, &fn_decl);
         arg_idents.sort_by(|a, b| match (a, b) {
-            (IdentWrapper::Ident(..), IdentWrapper::Empty) => Ordering::Less,
-            (IdentWrapper::Ident(..), IdentWrapper::Ident(..)) => Ordering::Equal,
-            (IdentWrapper::Empty, IdentWrapper::Ident(..)) => Ordering::Greater,
-            (IdentWrapper::Empty, IdentWrapper::Empty) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+            _ => Ordering::Equal,
         });
-
-        arg_idents.dedup_by(|a, b| match (a, b) {
-            (IdentWrapper::Empty, IdentWrapper::Empty) => true,
-            _ => false,
-        });
-
+        arg_idents.dedup_by(|a, b| a.is_none() && b.is_none());
         arg_idents
     };
 
-    let pretty = if args.pretty { "#" } else { "" };
+    println!("{:?}", arg_idents);
+
+    let pretty = if attrs.iter().any(|attr| attr.pretty) {
+        "#"
+    } else {
+        ""
+    };
+
+    let arg_formats = attrs
+        .iter()
+        .find(|attr| attr.is_direct())
+        .map(|attr| &attr.args_format);
+
+    let prefix_enter = attrs
+        .iter()
+        .map(|attr| &attr.prefix_enter)
+        .collect::<Prefix>()
+        .enter();
+
+    let prefix_exit = attrs
+        .iter()
+        .map(|attr| &attr.prefix_exit)
+        .collect::<Prefix>()
+        .exit();
 
     let entering_format = {
         let arg_idents_format = arg_idents
             .iter()
-            .filter_map(|wrapped| match wrapped {
-                IdentWrapper::Empty => Some("...".to_string()),
-                IdentWrapper::Ident(arg_ident) => Some(
-                    args.args_format
-                        .get(arg_ident)
-                        .cloned()
-                        .map(|fmt| format!("{}: {}", arg_ident, fmt))
-                        .unwrap_or_else(|| format!("{}: {{:{}?}}", arg_ident, pretty)),
-                ),
+            .map(|wrapped| {
+                wrapped.as_ref().map_or_else(
+                    || "...".to_string(),
+                    |arg_ident| {
+                        arg_formats
+                            .map(|formats| formats.get(arg_ident))
+                            .flatten()
+                            .map_or_else(
+                                || format!("{}: {{:{}?}}", arg_ident, pretty),
+                                |fmt| format!("{}: {}", arg_ident, fmt),
+                            )
+                    },
+                )
             })
             .collect::<Vec<_>>()
             .join("\n\t");
 
         let sep = if arg_idents.is_empty() { "" } else { "\n\t" };
 
-        format!("{}{}{}{}", args.prefix_enter, ident, sep, arg_idents_format)
+        format!("{}{}{}{}", prefix_enter, ident, sep, arg_idents_format)
     };
 
     let arg_idents = arg_idents
         .into_iter()
-        .filter_map(|wrapped| {
-            if let IdentWrapper::Ident(arg_ident) = wrapped {
-                Some(arg_ident)
-            } else {
-                None
-            }
-        })
+        .filter_map(|wrapped| wrapped)
         .collect::<Vec<_>>();
 
     let return_var = "res".to_string();
-    let exiting_format = args
-        .args_format
-        .iter()
-        .find(|(arg_ident, _)| arg_ident.to_string() == return_var)
-        .map(|(_, fmt)| format!("{}{}\n\t{}: {}", args.prefix_exit, ident, return_var, fmt))
-        .unwrap_or_else(|| {
-            format!(
-                "{}{}\n\t{}: {{:{}?}}",
-                args.prefix_exit, ident, return_var, pretty
-            )
-        });
+    let exiting_format = arg_formats
+        .map(|formats| {
+            formats
+                .iter()
+                .find(|(arg_ident, _)| arg_ident.to_string() == return_var)
+        })
+        .flatten()
+        .map_or_else(
+            || {
+                format!(
+                    "{}{}\n\t{}: {{:{}?}}",
+                    prefix_exit, ident, return_var, pretty
+                )
+            },
+            |(_, fmt)| format!("{}{}\n\t{}: {}", prefix_exit, ident, return_var, fmt),
+        );
 
-    let pause_stmt = if args.pause {
+    let pause_stmt = if attrs.iter().any(|attr| attr.pause) {
         quote! {{
             use std::io::{self, BufRead};
             let stdin = io::stdin();
@@ -299,11 +434,13 @@ fn construct_traced_block(
         quote!()
     };
 
-    let printer = if args.logging {
-        quote! { log::trace! }
-    } else {
-        quote! { println! }
-    };
+    // let printer = if args.logging {
+    //     quote! { log::trace! }
+    // } else {
+    //     quote! { println! }
+    // };
+
+    let printer = quote! { log::trace! };
 
     parse_quote! {{
         #printer(#entering_format, #(#arg_idents,)*);
@@ -317,61 +454,56 @@ fn construct_traced_block(
 }
 
 fn extract_arg_idents(
-    args: &args::Args,
-    attr_applied: AttrApplied,
+    attrs: &[AttrApplication],
     fn_decl: &syn::FnDecl,
-) -> Vec<IdentWrapper> {
+) -> Vec<Option<proc_macro2::Ident>> {
     fn process_pat(
-        args: &args::Args,
-        attr_applied: AttrApplied,
+        attrs: &[AttrApplication],
         pat: &syn::Pat,
-        arg_idents: &mut Vec<IdentWrapper>,
+        arg_idents: &mut Vec<Option<proc_macro2::Ident>>,
     ) {
         match *pat {
             syn::Pat::Ident(ref pat_ident) => {
                 let ident = &pat_ident.ident;
 
-                if let AttrApplied::Directly = attr_applied {
-                    match args.filter {
-                        args::Filter::Enable(ref idents) if !idents.contains(ident) => {
-                            arg_idents.push(IdentWrapper::Empty);
-                            return;
+                for attr in attrs {
+                    if let AttrApplication::Directly(attr) = attr {
+                        match attr.filter {
+                            args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+                                arg_idents.push(None);
+                                return;
+                            }
+                            args::Filter::Disable(ref idents) if idents.contains(ident) => {
+                                arg_idents.push(None);
+                                return;
+                            }
+                            _ => (),
                         }
-                        args::Filter::Disable(ref idents) if idents.contains(ident) => {
-                            arg_idents.push(IdentWrapper::Empty);
-                            return;
-                        }
-                        _ => (),
-                    }
-                };
+                    };
+                }
 
-                arg_idents.push(IdentWrapper::Ident(ident.clone()));
+                arg_idents.push(Some(ident.clone()));
             }
             syn::Pat::Tuple(ref pat_tuple) => {
                 pat_tuple.front.iter().for_each(|pat| {
-                    process_pat(args, attr_applied, pat, arg_idents);
+                    process_pat(attrs, pat, arg_idents);
                 });
             }
             _ => unimplemented!(),
         }
     }
 
-    let mut arg_idents = vec![];
+    let mut arg_idents = Vec::new();
 
     for input in &fn_decl.inputs {
         match *input {
             syn::FnArg::SelfRef(_) | syn::FnArg::SelfValue(_) => (), // ignore `self`
             syn::FnArg::Captured(ref arg_captured) => {
-                process_pat(args, attr_applied, &arg_captured.pat, &mut arg_idents);
+                process_pat(attrs, &arg_captured.pat, &mut arg_idents);
             }
             syn::FnArg::Inferred(_) | syn::FnArg::Ignored(_) => unimplemented!(),
         }
     }
 
     arg_idents
-}
-
-enum IdentWrapper {
-    Empty,
-    Ident(proc_macro2::Ident),
 }
