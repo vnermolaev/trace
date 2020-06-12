@@ -10,7 +10,6 @@ pub(crate) struct Args {
     pub(crate) filter: Filter,
     pub(crate) pause: bool,
     pub(crate) pretty: bool,
-    pub(crate) logging: bool,
     pub(crate) args_format: HashMap<proc_macro2::Ident, String>,
 }
 
@@ -78,7 +77,6 @@ impl Args {
             Disable(proc_macro2::Span, HashSet<proc_macro2::Ident>),
             Pause(proc_macro2::Span, bool),
             Pretty(proc_macro2::Span, bool),
-            Logging(proc_macro2::Span, bool),
             ArgFormat(proc_macro2::Span, (proc_macro2::Ident, String)),
         }
 
@@ -92,7 +90,6 @@ impl Args {
                     Disable,
                     Pause,
                     Pretty,
-                    Logging,
                     ArgFormat,
                 }
 
@@ -104,7 +101,6 @@ impl Args {
                     "disable" => ArgName::Disable,
                     "pause" => ArgName::Pause,
                     "pretty" => ArgName::Pretty,
-                    "logging" => ArgName::Logging,
                     _ => ArgName::ArgFormat,
                 };
 
@@ -144,12 +140,6 @@ impl Args {
                         "`pretty` must be a meta word",
                     )]
                 };
-                let logging_type_error = || {
-                    vec![syn::Error::new_spanned(
-                        ident.clone(),
-                        "`logging` must be a meta word",
-                    )]
-                };
                 let arg_format_error = || {
                     vec![syn::Error::new_spanned(
                         ident.clone(),
@@ -161,7 +151,6 @@ impl Args {
                     syn::Meta::Word(_) => match arg_name {
                         ArgName::Pause => Ok(Arg::Pause(meta.span(), true)),
                         ArgName::Pretty => Ok(Arg::Pretty(meta.span(), true)),
-                        ArgName::Logging => Ok(Arg::Logging(meta.span(), false)),
 
                         ArgName::PrefixEnter => Err(prefix_enter_type_error()),
                         ArgName::PrefixExit => Err(prefix_exit_type_error()),
@@ -216,7 +205,6 @@ impl Args {
                         ArgName::ArgFormat => Err(arg_format_error()),
                         ArgName::Pause => Err(pause_type_error()),
                         ArgName::Pretty => Err(pretty_type_error()),
-                        ArgName::Logging => Err(logging_type_error()),
                     },
                     syn::Meta::NameValue(syn::MetaNameValue {
                         ref ident, ref lit, ..
@@ -254,7 +242,6 @@ impl Args {
                         ArgName::Disable => Err(disable_type_error()),
                         ArgName::Pause => Err(pause_type_error()),
                         ArgName::Pretty => Err(pretty_type_error()),
-                        ArgName::Logging => Err(logging_type_error()),
                     },
                 }
             }
@@ -270,7 +257,6 @@ impl Args {
         let mut disable_args = Vec::new();
         let mut pause_args = Vec::new();
         let mut pretty_args = Vec::new();
-        let mut logging_args = Vec::new();
         let mut arg_format_args = HashMap::new();
         let mut errors = Vec::new();
 
@@ -284,7 +270,6 @@ impl Args {
                     Arg::Disable(span, idents) => disable_args.push((span, idents)),
                     Arg::Pause(span, b) => pause_args.push((span, b)),
                     Arg::Pretty(span, b) => pretty_args.push((span, b)),
-                    Arg::Logging(span, b) => logging_args.push((span, b)),
                     Arg::ArgFormat(span, (ident, format)) => {
                         if !arg_format_args.contains_key(&ident) {
                             arg_format_args.insert(ident, format);
@@ -343,13 +328,6 @@ impl Args {
                     .map(|(span, _)| syn::Error::new(*span, "duplicate `pretty`")),
             );
         }
-        if logging_args.len() >= 2 {
-            errors.extend(
-                logging_args
-                    .iter()
-                    .map(|(span, _)| syn::Error::new(*span, "duplicate `logging`")),
-            );
-        }
 
         // Report the presence of mutually exclusive arguments
         if enable_args.len() == 1 && disable_args.len() == 1 {
@@ -384,7 +362,6 @@ impl Args {
             };
             let pause = first_no_span!(pause_args).unwrap_or(DEFAULT_PAUSE);
             let pretty = first_no_span!(pretty_args).unwrap_or(DEFAULT_PRETTY);
-            let logging = first_no_span!(logging_args).unwrap_or(DEFAULT_LOGGING);
 
             Ok(Self {
                 prefix_enter,
@@ -392,7 +369,6 @@ impl Args {
                 filter,
                 pause,
                 pretty,
-                logging,
                 args_format: arg_format_args,
             })
         } else {
