@@ -72,6 +72,7 @@ impl Args {
         enum Arg {
             PrefixEnter(proc_macro2::Span, String),
             PrefixExit(proc_macro2::Span, String),
+            Prefix(proc_macro2::Span, String),
             Enable(proc_macro2::Span, HashSet<proc_macro2::Ident>),
             Disable(proc_macro2::Span, HashSet<proc_macro2::Ident>),
             Pause(proc_macro2::Span, bool),
@@ -85,6 +86,7 @@ impl Args {
                 enum ArgName {
                     PrefixEnter,
                     PrefixExit,
+                    Prefix,
                     Enable,
                     Disable,
                     Pause,
@@ -96,6 +98,7 @@ impl Args {
                 let arg_name = match ident.to_string().as_str() {
                     "prefix_enter" => ArgName::PrefixEnter,
                     "prefix_exit" => ArgName::PrefixExit,
+                    "prefix" => ArgName::Prefix,
                     "enable" => ArgName::Enable,
                     "disable" => ArgName::Disable,
                     "pause" => ArgName::Pause,
@@ -113,6 +116,12 @@ impl Args {
                     vec![syn::Error::new_spanned(
                         ident.clone(),
                         "`prefix_exit` requires a string value",
+                    )]
+                };
+                let prefix_type_error = || {
+                    vec![syn::Error::new_spanned(
+                        ident.clone(),
+                        "`prefix` requires a string value",
                     )]
                 };
                 let enable_type_error = || {
@@ -153,6 +162,7 @@ impl Args {
 
                         ArgName::PrefixEnter => Err(prefix_enter_type_error()),
                         ArgName::PrefixExit => Err(prefix_exit_type_error()),
+                        ArgName::Prefix => Err(prefix_type_error()),
                         ArgName::Enable => Err(enable_type_error()),
                         ArgName::Disable => Err(disable_type_error()),
                         ArgName::ArgFormat => Err(arg_format_error()),
@@ -201,6 +211,7 @@ impl Args {
 
                         ArgName::PrefixEnter => Err(prefix_enter_type_error()),
                         ArgName::PrefixExit => Err(prefix_exit_type_error()),
+                        ArgName::Prefix => Err(prefix_type_error()),
                         ArgName::ArgFormat => Err(arg_format_error()),
                         ArgName::Pause => Err(pause_type_error()),
                         ArgName::Pretty => Err(pretty_type_error()),
@@ -224,6 +235,15 @@ impl Args {
                             _ => Err(vec![syn::Error::new_spanned(
                                 lit,
                                 "`prefix_exit` must have a string value",
+                            )]),
+                        },
+                        ArgName::Prefix => match *lit {
+                            syn::Lit::Str(ref lit_str) => {
+                                Ok(Arg::Prefix(meta.span(), lit_str.value()))
+                            }
+                            _ => Err(vec![syn::Error::new_spanned(
+                                lit,
+                                "`prefix` must have a string value",
                             )]),
                         },
                         ArgName::ArgFormat => match *lit {
@@ -252,6 +272,7 @@ impl Args {
 
         let mut prefix_enter_args = Vec::new();
         let mut prefix_exit_args = Vec::new();
+        let mut prefix_args = Vec::new();
         let mut enable_args = Vec::new();
         let mut disable_args = Vec::new();
         let mut pause_args = Vec::new();
@@ -265,6 +286,7 @@ impl Args {
                 Ok(arg) => match arg {
                     Arg::PrefixEnter(span, s) => prefix_enter_args.push((span, s)),
                     Arg::PrefixExit(span, s) => prefix_exit_args.push((span, s)),
+                    Arg::Prefix(span, s) => prefix_args.push((span, s)),
                     Arg::Enable(span, idents) => enable_args.push((span, idents)),
                     Arg::Disable(span, idents) => disable_args.push((span, idents)),
                     Arg::Pause(span, b) => pause_args.push((span, b)),
@@ -299,6 +321,13 @@ impl Args {
                     .map(|(span, _)| syn::Error::new(*span, "duplicate `prefix_exit`")),
             );
         }
+        if prefix_args.len() >= 2 {
+            errors.extend(
+                prefix_args
+                    .iter()
+                    .map(|(span, _)| syn::Error::new(*span, "duplicate `prefix`")),
+            );
+        }
         if enable_args.len() >= 2 {
             errors.extend(
                 enable_args
@@ -329,7 +358,7 @@ impl Args {
         }
 
         // Report the presence of mutually exclusive arguments
-        if enable_args.len() == 1 && disable_args.len() == 1 {
+        if !enable_args.is_empty() && !disable_args.is_empty() {
             errors.push(syn::Error::new(
                 enable_args[0].0,
                 "cannot have both `enable` and `disable`",
@@ -340,6 +369,29 @@ impl Args {
             ));
         }
 
+        // No other prefixes are allowed if `prefix` is set.
+        if !prefix_args.is_empty() && !prefix_enter_args.is_empty() {
+            errors.push(syn::Error::new(
+                prefix_args[0].0,
+                "cannot have both `prefix` and `prefix_enter`",
+            ));
+            errors.push(syn::Error::new(
+                prefix_enter_args[0].0,
+                "cannot have both `prefix` and `prefix_enter`",
+            ));
+        }
+
+        if !prefix_args.is_empty() && !prefix_exit_args.is_empty() {
+            errors.push(syn::Error::new(
+                prefix_args[0].0,
+                "cannot have both `prefix` and `prefix_exit`",
+            ));
+            errors.push(syn::Error::new(
+                prefix_exit_args[0].0,
+                "cannot have both `prefix` and `prefix_exit`",
+            ));
+        }
+
         if errors.is_empty() {
             macro_rules! first_no_span {
                 ($iterable:expr) => {
@@ -347,12 +399,22 @@ impl Args {
                 };
             }
 
-            let prefix_enter = first_no_span!(prefix_enter_args)
+            let (prefix_enter, prefix_exit) = if prefix_args.is_empty() {
+                (
+                    first_no_span!(prefix_enter_args),
+                    first_no_span!(prefix_exit_args),
+                )
+            } else {
+                let common_prefix = first_no_span!(prefix_args);
+                (common_prefix.clone(), common_prefix)
+            };
+            let prefix_enter = prefix_enter
                 .map(|prefix| Prefix(Some(prefix)))
                 .unwrap_or_else(|| Prefix(None));
-            let prefix_exit = first_no_span!(prefix_exit_args)
+            let prefix_exit = prefix_exit
                 .map(|prefix| Prefix(Some(prefix)))
                 .unwrap_or_else(|| Prefix(None));
+
             let filter = match (first_no_span!(enable_args), first_no_span!(disable_args)) {
                 (None, None) => Filter::None,
                 (Some(idents), None) => Filter::Enable(idents),
