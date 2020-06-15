@@ -15,12 +15,12 @@ impl Foo {
         Self {}
     }
 
-    #[trace(prefix_enter = "<static>::", a = "arg_1 {}", disable(b))]
+    #[trace(prefix_enter = "<static>::", a = "(defines velocity) {}", disable(b))]
     fn foo(a: u32, b: i32) -> i32 {
         b
     }
 
-    #[trace(res = "returning {}")]
+    #[trace(res = " {}")]
     fn bar(&self, a: i32) -> i32 {
         a
     }
