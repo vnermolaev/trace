@@ -1,12 +1,10 @@
-extern crate trace;
-
 use std::thread;
 use std::time::Duration;
 use trace::trace;
 
-trace::init_depth_var!();
-
 fn main() {
+    env_logger::init();
+
     let handle = thread::spawn(|| {
         foo(10);
     });

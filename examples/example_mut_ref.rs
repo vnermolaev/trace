@@ -1,10 +1,8 @@
-extern crate trace;
-
 use trace::trace;
 
-trace::init_depth_var!();
-
 fn main() {
+    env_logger::init();
+
     let mut a = 10;
     let mut b = 20;
     foo(&mut a, &mut b);

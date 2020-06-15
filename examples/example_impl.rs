@@ -1,10 +1,8 @@
-extern crate trace;
-
 use trace::trace;
 
-trace::init_depth_var!();
-
 fn main() {
+    env_logger::init();
+
     let foo = Foo;
     Foo::foo(2);
     foo.bar(7);

@@ -1,10 +1,8 @@
-extern crate trace;
-
 use trace::trace;
 
-trace::init_depth_var!();
-
 fn main() {
+    env_logger::init();
+
     foo(Foo("Foo".to_string()));
 }
 
