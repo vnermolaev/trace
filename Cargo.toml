@@ -2,6 +2,7 @@
 name = "trace"
 version = "0.1.5"
 authors = ["Gulshan Singh <gsingh2011@gmail.com>"]
+edition = "2018"
 repository = "https://github.com/gsingh93/trace"
 license = "MIT"
 description = "A syntax extension for tracing the execution of functions"
