@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-
 use std::iter::FromIterator;
 use syn::{self, spanned::Spanned};
 
@@ -31,16 +30,12 @@ impl Prefix {
         format!(
             "{} {}",
             Self::DEFAULT_ENTER,
-            self.0.as_ref().map(|p| p.as_str()).unwrap_or("")
+            self.0.as_deref().unwrap_or("")
         )
     }
 
     pub(crate) fn exit(&self) -> String {
-        format!(
-            "{} {}",
-            Self::DEFAULT_EXIT,
-            self.0.as_ref().map(|p| p.as_str()).unwrap_or("")
-        )
+        format!("{} {}", Self::DEFAULT_EXIT, self.0.as_deref().unwrap_or(""))
     }
 }
 
@@ -69,6 +64,7 @@ impl Args {
     pub(crate) fn from_raw_args(raw_args: syn::AttributeArgs) -> Result<Self, Vec<syn::Error>> {
         // Different types of arguments accepted by `#[trace]`;
         // spans are needed for friendly error reporting of duplicate arguments
+        #[allow(clippy::enum_variant_names)]
         enum Arg {
             PrefixEnter(proc_macro2::Span, String),
             PrefixExit(proc_macro2::Span, String),
@@ -292,6 +288,7 @@ impl Args {
                     Arg::Pause(span, b) => pause_args.push((span, b)),
                     Arg::Pretty(span, b) => pretty_args.push((span, b)),
                     Arg::ArgFormat(span, (ident, format)) => {
+                        #[allow(clippy::map_entry)]
                         if !arg_format_args.contains_key(&ident) {
                             arg_format_args.insert(ident, format);
                         } else {

@@ -45,11 +45,7 @@ pub fn trace(
                 .map(syn::Error::to_compile_error)
                 .collect::<proc_macro2::TokenStream>(),
         }
-    }
-    // else if let Ok(impl_item) = syn::ImplItem::parse.parse(input.clone()) {
-    //     expand_impl_item(&args, impl_item)
-    // }
-    else {
+    } else {
         let input2 = proc_macro2::TokenStream::from(input);
         syn::Error::new_spanned(input2, "expected one of: `fn`, `impl`, `mod`").to_compile_error()
     };
@@ -68,16 +64,6 @@ fn transform_item(attrs: &[AttrApplication], item: &mut syn::Item) -> Result<(),
         )]),
     }
 }
-
-// fn expand_impl_item(args: &args::Args, mut impl_item: syn::ImplItem) -> proc_macro2::TokenStream {
-//     transform_impl_item(args, AttrApplied::Directly, &mut impl_item);
-//
-//     match impl_item {
-//         syn::ImplItem::Method(_) => impl_item.into_token_stream(),
-//         _ => syn::Error::new_spanned(impl_item, "#[trace] is not supported for this impl item")
-//             .to_compile_error(),
-//     }
-// }
 
 fn transform_fn(
     attrs: &[AttrApplication],
@@ -187,37 +173,7 @@ fn transform_impl(
 
     Ok(())
 }
-//
-// fn transform_impl_item(
-//     args: &args::Args,
-//     attr_applied: AttrApplied,
-//     impl_item: &mut syn::ImplItem,
-// ) {
-//     // Will probably add more cases in the future
-//     #[cfg_attr(feature = "cargo-clippy", allow(single_match))]
-//     match *impl_item {
-//         syn::ImplItem::Method(ref mut impl_item_method) => {
-//             transform_method(args, attr_applied, impl_item_method)
-//         }
-//         _ => (),
-//     }
-// }
-//
-// fn transform_method(
-//     args: &args::Args,
-//     attr_applied: AttrApplied,
-//     impl_item_method: &mut syn::ImplItemMethod,
-// ) {
-//     println!("METHOD");
-//     impl_item_method.block = construct_traced_block(
-//         &args,
-//         attr_applied,
-//         &impl_item_method.sig.ident,
-//         &impl_item_method.sig.decl,
-//         &impl_item_method.block,
-//     );
-// }
-//
+
 fn construct_traced_block(
     attrs: &[AttrApplication],
     ident: &proc_macro2::Ident,
@@ -288,12 +244,12 @@ fn construct_traced_block(
         .filter_map(|wrapped| wrapped)
         .collect::<Vec<_>>();
 
-    let return_var = "res".to_string();
+    let return_var = "res";
     let exiting_format = arg_formats
         .map(|formats| {
             formats
                 .iter()
-                .find(|(arg_ident, _)| arg_ident.to_string() == return_var)
+                .find(|(arg_ident, _)| *arg_ident == return_var)
         })
         .flatten()
         .map_or_else(
@@ -334,7 +290,7 @@ fn create_context(given: &[AttrApplication], local: Option<args::Args>) -> Vec<A
         .iter()
         .cloned()
         .map(|attr| attr.demote())
-        .chain(local.map(|local_attr| AttrApplication::Directly(local_attr)))
+        .chain(local.map(AttrApplication::Directly))
         .collect::<Vec<_>>()
 }
 
@@ -348,7 +304,7 @@ fn extract_local_attrs(
     // Evaluate attached macros.
     let pos = attrs
         .iter()
-        .position(|attr| attr.path.segments[0].ident.to_string() == MACRO_NAME);
+        .position(|attr| attr.path.segments[0].ident == MACRO_NAME);
 
     if let Some(pos) = pos {
         // Another MACRO_NAME is attached.
