@@ -1,10 +1,3 @@
-#![feature(trace_macros)]
-
-extern crate proc_macro;
-extern crate proc_macro2;
-extern crate quote;
-extern crate syn;
-
 mod args;
 
 use args::Prefix;
@@ -12,10 +5,8 @@ use quote::{quote, ToTokens};
 use std::cmp::Ordering;
 use std::ops::Deref;
 use std::str::FromStr;
-use syn::{
-    parse::{Parse, Parser},
-    parse_quote,
-};
+use syn::parse::{Parse, Parser};
+use syn::parse_quote;
 
 const MACRO_NAME: &str = "trace";
 
