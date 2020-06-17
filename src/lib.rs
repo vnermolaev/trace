@@ -62,6 +62,7 @@ fn transform_fn(
 ) -> Result<(), Vec<syn::Error>> {
     item_fn.block = Box::new(construct_traced_block(
         &attrs,
+        item_fn.asyncness.is_some(),
         &item_fn.ident,
         &item_fn.decl,
         &item_fn.block,
@@ -155,6 +156,7 @@ fn transform_impl(
 
             impl_item_method.block = construct_traced_block(
                 &attrs,
+                impl_item_method.sig.asyncness.is_some(),
                 &impl_item_method.sig.ident,
                 &impl_item_method.sig.decl,
                 &impl_item_method.block,
@@ -167,6 +169,7 @@ fn transform_impl(
 
 fn construct_traced_block(
     attrs: &[AttrApplication],
+    is_async: bool,
     ident: &proc_macro2::Ident,
     fn_decl: &syn::FnDecl,
     original_block: &syn::Block,
@@ -265,11 +268,16 @@ fn construct_traced_block(
 
     let printer = quote! { log::trace! };
 
+    let (block_prefix, block_postfix) = if is_async {
+        (quote! { async move }, quote! {.await})
+    } else {
+        (quote!(), quote!())
+    };
+
     parse_quote! {{
         #printer(#entering_format, #(#arg_idents,)*);
         #pause_stmt
-        let mut fn_closure = move || #original_block;
-        let fn_return_value = fn_closure();
+        let fn_return_value = #block_prefix #original_block #block_postfix;
         #printer(#exiting_format, fn_return_value);
         #pause_stmt
         fn_return_value
