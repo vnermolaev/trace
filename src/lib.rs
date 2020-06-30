@@ -277,7 +277,7 @@ fn construct_traced_block(
     parse_quote! {{
         #printer(#entering_format, #(#arg_idents,)*);
         #pause_stmt
-        let __inner_body__ = #block_prefix #original_block;
+        let mut __inner_body__ = #block_prefix #original_block;
         let __inner_return_value__ = __inner_body__()#block_postfix;
         #printer(#exiting_format, __inner_return_value__);
         #pause_stmt
