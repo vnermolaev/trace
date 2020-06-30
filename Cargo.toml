@@ -17,8 +17,9 @@ proc-macro = true
 proc-macro2 = "0.4.20"
 quote = "0.6.8"
 syn = { version = "0.15.22", features = ["full"] }
+rand = "0.7.3"
 
 [dev-dependencies]
 log = "0.4.8"
 env_logger = "0.6.2"
-tokio = {version = "0.2.21", features = ["macros"] }
+tokio = {version = "0.2.21", features = ["macros", "time"] }
