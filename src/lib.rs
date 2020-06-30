@@ -269,18 +269,19 @@ fn construct_traced_block(
     let printer = quote! { log::trace! };
 
     let (block_prefix, block_postfix) = if is_async {
-        (quote! { async move }, quote! {.await})
+        (quote! { move || async move }, quote! {.await})
     } else {
-        (quote!(), quote!())
+        (quote! { move || }, quote!())
     };
 
     parse_quote! {{
         #printer(#entering_format, #(#arg_idents,)*);
         #pause_stmt
-        let fn_return_value = #block_prefix #original_block #block_postfix;
-        #printer(#exiting_format, fn_return_value);
+        let __inner_body__ = #block_prefix #original_block;
+        let __inner_return_value__ = __inner_body__()#block_postfix;
+        #printer(#exiting_format, __inner_return_value__);
         #pause_stmt
-        fn_return_value
+        __inner_return_value__
     }}
 }
 
