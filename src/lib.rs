@@ -173,7 +173,7 @@ fn construct_traced_block(
     fn_decl: &syn::FnDecl,
     original_block: &syn::Block,
 ) -> syn::Block {
-    let arg_idents = extract_arg_idents(attrs, &fn_decl);
+    let fn_arguments = extract_arg_idents(attrs, &fn_decl);
 
     let pretty = if attrs.iter().any(|attr| attr.pretty) {
         "#"
@@ -181,17 +181,19 @@ fn construct_traced_block(
         ""
     };
 
-    let arg_formats = attrs
+    let requested_formats = attrs
         .iter()
         .find(|attr| attr.is_direct())
         .map(|attr| &attr.args_format);
 
+    // Combine all enter prefixes.
     let prefix_enter = attrs
         .iter()
         .map(|attr| &attr.prefix_enter)
         .collect::<Prefix>()
         .enter();
 
+    // Combine all exit prefixes.
     let prefix_exit = attrs
         .iter()
         .map(|attr| &attr.prefix_exit)
@@ -199,16 +201,16 @@ fn construct_traced_block(
         .exit();
 
     let entering_format = {
-        let sep = if arg_idents.is_empty() { "" } else { "\n\t" };
+        let sep = if fn_arguments.is_empty() { "" } else { "\n\t" };
 
-        let arg_idents_format = arg_idents
+        let arguments_format = fn_arguments
             .iter()
             .map(|inclusion| {
                 match inclusion {
                     Inclusion::Value(arg_ident) => {
                         // Argument's name and value must be printed,
                         // find matching format if it was specified.
-                        arg_formats
+                        requested_formats
                             .map(|formats| formats.get(arg_ident))
                             .flatten()
                             .map_or_else(
@@ -225,10 +227,10 @@ fn construct_traced_block(
             .collect::<Vec<_>>()
             .join("\n\t");
 
-        format!("{}{}{}{}", prefix_enter, ident, sep, arg_idents_format)
+        format!("{}{}{}{}", prefix_enter, ident, sep, arguments_format)
     };
 
-    let arg_idents = arg_idents
+    let traced_arguments = fn_arguments
         .into_iter()
         .filter_map(|inclusion| match inclusion {
             Inclusion::Value(x) => Some(x),
@@ -237,22 +239,51 @@ fn construct_traced_block(
         .collect::<Vec<_>>();
 
     let return_var = "res";
-    let exiting_format = arg_formats
-        .map(|formats| {
-            formats
-                .iter()
-                .find(|(arg_ident, _)| *arg_ident == return_var)
+    let fn_result = attrs
+        .iter()
+        .filter(|attr| attr.is_direct())
+        .map(|attr| match attr.filter {
+            args::Filter::Enable(ref idents)
+                if !idents.iter().any(|ident| *ident == return_var) =>
+            {
+                Inclusion::Skip(return_var)
+            }
+            args::Filter::Disable(ref idents)
+                if idents.iter().any(|ident| *ident == return_var) =>
+            {
+                Inclusion::Skip(return_var)
+            }
+            _ => Inclusion::Value(return_var),
         })
-        .flatten()
-        .map_or_else(
-            || {
-                format!(
-                    "{}{}\n\t{}: {{:{}?}}",
-                    prefix_exit, ident, return_var, pretty
-                )
-            },
-            |(_, fmt)| format!("{}{}\n\t{}: {}", prefix_exit, ident, return_var, fmt),
-        );
+        .next()
+        .unwrap_or(Inclusion::Value(return_var));
+
+    let (exiting_format, result_stmt) = if let Inclusion::Skip(_) = fn_result {
+        (
+            format!("{}{}\n\t{}: ...", prefix_exit, ident, return_var),
+            quote!(),
+        )
+    } else {
+        (
+            requested_formats
+                .map(|formats| {
+                    formats
+                        .iter()
+                        .find(|(arg_ident, _)| *arg_ident == return_var)
+                })
+                .flatten()
+                .map_or_else(
+                    || {
+                        format!(
+                            "{}{}\n\t{}: {{:{}?}}",
+                            prefix_exit, ident, return_var, pretty
+                        )
+                    },
+                    |(_, fmt)| format!("{}{}\n\t{}: {}", prefix_exit, ident, return_var, fmt),
+                ),
+            quote! {{ &__inner_return_value__ }},
+        )
+    };
 
     let pause_stmt = if attrs.iter().any(|attr| attr.pause) {
         quote! {{
@@ -273,11 +304,11 @@ fn construct_traced_block(
     };
 
     parse_quote! {{
-        #printer(#entering_format, #(#arg_idents,)*);
+        #printer(#entering_format, #(#traced_arguments,)*);
         #pause_stmt
         let mut __inner_body__ = #block_prefix #original_block;
         let __inner_return_value__ = __inner_body__()#block_postfix;
-        #printer(#exiting_format, __inner_return_value__);
+        #printer(#exiting_format, #result_stmt);
         #pause_stmt
         __inner_return_value__
     }}

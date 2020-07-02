@@ -1,6 +1,6 @@
 [package]
 name = "trace"
-version = "0.3.1"
+version = "0.3.2"
 authors = [
     "Victor Ermolaev <victorermolaev@gmail.com>",
     "Gulshan Singh <gsingh2011@gmail.com>"
