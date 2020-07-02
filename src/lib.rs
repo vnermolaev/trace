@@ -2,7 +2,6 @@ mod args;
 
 use args::Prefix;
 use quote::{quote, ToTokens};
-use std::cmp::Ordering;
 use std::ops::Deref;
 use std::str::FromStr;
 use syn::parse::{Parse, Parser};
@@ -174,16 +173,7 @@ fn construct_traced_block(
     fn_decl: &syn::FnDecl,
     original_block: &syn::Block,
 ) -> syn::Block {
-    let arg_idents = {
-        let mut arg_idents = extract_arg_idents(attrs, &fn_decl);
-        arg_idents.sort_by(|a, b| match (a, b) {
-            (None, Some(_)) => Ordering::Greater,
-            (Some(_), None) => Ordering::Less,
-            _ => Ordering::Equal,
-        });
-        arg_idents.dedup_by(|a, b| a.is_none() && b.is_none());
-        arg_idents
-    };
+    let arg_idents = extract_arg_idents(attrs, &fn_decl);
 
     let pretty = if attrs.iter().any(|attr| attr.pretty) {
         "#"
@@ -209,12 +199,15 @@ fn construct_traced_block(
         .exit();
 
     let entering_format = {
+        let sep = if arg_idents.is_empty() { "" } else { "\n\t" };
+
         let arg_idents_format = arg_idents
             .iter()
-            .map(|wrapped| {
-                wrapped.as_ref().map_or_else(
-                    || "...".to_string(),
-                    |arg_ident| {
+            .map(|inclusion| {
+                match inclusion {
+                    Inclusion::Value(arg_ident) => {
+                        // Argument's name and value must be printed,
+                        // find matching format if it was specified.
                         arg_formats
                             .map(|formats| formats.get(arg_ident))
                             .flatten()
@@ -222,20 +215,25 @@ fn construct_traced_block(
                                 || format!("{}: {{:{}?}}", arg_ident, pretty),
                                 |fmt| format!("{}: {}", arg_ident, fmt),
                             )
-                    },
-                )
+                    }
+                    Inclusion::Skip(arg_ident) => {
+                        // Only arguments name must be printed.
+                        format!("{}: ...", arg_ident)
+                    }
+                }
             })
             .collect::<Vec<_>>()
             .join("\n\t");
-
-        let sep = if arg_idents.is_empty() { "" } else { "\n\t" };
 
         format!("{}{}{}{}", prefix_enter, ident, sep, arg_idents_format)
     };
 
     let arg_idents = arg_idents
         .into_iter()
-        .filter_map(|wrapped| wrapped)
+        .filter_map(|inclusion| match inclusion {
+            Inclusion::Value(x) => Some(x),
+            Inclusion::Skip(_) => None,
+        })
         .collect::<Vec<_>>();
 
     let return_var = "res";
@@ -328,33 +326,33 @@ fn extract_local_attrs(
 fn extract_arg_idents(
     attrs: &[AttrApplication],
     fn_decl: &syn::FnDecl,
-) -> Vec<Option<proc_macro2::Ident>> {
+) -> Vec<Inclusion<proc_macro2::Ident>> {
     fn process_pat(
         attrs: &[AttrApplication],
         pat: &syn::Pat,
-        arg_idents: &mut Vec<Option<proc_macro2::Ident>>,
+        arg_idents: &mut Vec<Inclusion<proc_macro2::Ident>>,
     ) {
         match *pat {
             syn::Pat::Ident(ref pat_ident) => {
                 let ident = &pat_ident.ident;
 
-                for attr in attrs {
-                    if let AttrApplication::Directly(attr) = attr {
-                        match attr.filter {
-                            args::Filter::Enable(ref idents) if !idents.contains(ident) => {
-                                arg_idents.push(None);
-                                return;
-                            }
-                            args::Filter::Disable(ref idents) if idents.contains(ident) => {
-                                arg_idents.push(None);
-                                return;
-                            }
-                            _ => (),
+                let direct_application = attrs.iter().filter(|attr| attr.is_direct());
+
+                for attr in direct_application {
+                    match attr.filter {
+                        args::Filter::Enable(ref idents) if !idents.contains(ident) => {
+                            arg_idents.push(Inclusion::Skip(ident.clone()));
+                            return;
                         }
-                    };
+                        args::Filter::Disable(ref idents) if idents.contains(ident) => {
+                            arg_idents.push(Inclusion::Skip(ident.clone()));
+                            return;
+                        }
+                        _ => (),
+                    }
                 }
 
-                arg_idents.push(Some(ident.clone()));
+                arg_idents.push(Inclusion::Value(ident.clone()));
             }
             syn::Pat::Tuple(ref pat_tuple) => {
                 pat_tuple.front.iter().for_each(|pat| {
@@ -413,4 +411,13 @@ impl Deref for AttrApplication {
             AttrApplication::Indirectly(attr) => attr,
         }
     }
+}
+
+/// Identifies whether argument value have to be printed or just specified as present,
+/// e.g.,
+/// Inclusion::Value(x) => x: value of x
+/// Inclusion::Skip(x) => x: ...
+enum Inclusion<T> {
+    Value(T),
+    Skip(T),
 }
